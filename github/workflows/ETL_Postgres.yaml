@@ -1,1 +1,78 @@
+name: Nightly Google Sheets → PostGres ETL
 
+on:
+  schedule:
+    - cron: "15 08 * * *"   # 08:15 UTC (≈ 11:15 Amman)
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "Enable verbose debug logging"
+        required: false
+        default: "false"
+
+jobs:
+  etl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      BQ_DATASET: etl_dataset
+      DEBUG: ${{ github.event.inputs.debug || 'false' }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # removed cache to avoid requirements.txt/pyproject warning
+
+      - name: Install deps
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          pip install \
+            pandas==2.2.* \
+            pyarrow>=14 \
+            google-cloud-bigquery>=3.20.0 \
+            gspread oauth2client
+          pip freeze > .pip-freeze.txt
+
+      - name: Sanity — files & Python
+        run: |
+          set -euxo pipefail
+          ls -la
+          python -c "import sys, pathlib, os; print('Python:', sys.version); print('Has config.json:', pathlib.Path('config.json').exists()); print('DEBUG:', os.getenv('DEBUG'))"
+
+      - name: Write Google credentials file from secret
+        run: |
+          set -euxo pipefail
+          echo "$GOOGLE_CREDENTIALS_JSON" > powerbi-etl-creds.json
+          python -c "import json; d=json.load(open('powerbi-etl-creds.json')); print('Service account email:', d.get('client_email'))"
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+
+     
+      - name: Run ETL (Sheets → BigQuery)
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/powerbi-etl-creds.json
+          ETL_CONFIG_FILE: config.json
+          BQ_DATASET: ${{ env.BQ_DATASET }}
+          DEBUG: ${{ env.DEBUG }}
+        run: |
+          set -euxo pipefail
+          python read_gsheet.py 2>&1 | tee -a run-console.log
+
+      - name: Upload artifacts (logs & env)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etl-run-artifacts
+          path: |
+            logs.txt
+            run-console.log
+            .pip-freeze.txt
+            powerbi-etl-creds.json
+          if-no-files-found: warn
