@@ -43,6 +43,8 @@ jobs:
             pyarrow>=14 \
             google-cloud-bigquery>=3.20.0 \
             gspread oauth2client
+            psycopg2-binary 
+            psycopg2
           pip freeze > .pip-freeze.txt
 
       - name: Sanity — files & Python
