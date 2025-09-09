@@ -60,7 +60,7 @@ jobs:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CRED }}
 
      
-      - name: Run ETL (Sheets → BigQuery)
+      - name: Run ETL (Sheets → Postgres)
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/powerbi-etl-creds.json
           ETL_CONFIG_FILE: config.json
