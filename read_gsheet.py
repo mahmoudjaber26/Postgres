@@ -28,11 +28,11 @@ logging.getLogger().addHandler(console)
 CONFIG_FILE = r"C:\Users\mjaber\Downloads\Python Transfer Files\Google Sheets Read in PY\config.json"
 
 DB_CONFIG = {
-    "host": "127.0.0.1",
-    "database": "postgres",
-    "user": "postgres",
-    "password": "0000",
-    "port": "5432"
+    "host": os.getenv("POSTGRES_HOST","localhost"),
+    "database": os.getenv("POSTGRES_DB","postgres"),
+    "user": os.getenv("POSTGRES_USER","postgres"),
+    "password": os.getenv("POSTGRES_PASSWORD","0000"),
+    "port": int(os.getenv("POSTGRES_PORT","5432")),
 }
 
 GSHEET_CREDENTIALS = r"C:\Users\mjaber\Downloads\Python Transfer Files\Google Sheets Read in PY\powerbi-etl-e1ebfd104446.json"
@@ -168,5 +168,6 @@ if __name__ == "__main__":
         if 'conn' in locals():
             conn.close()
             logging.info("🔒 PostgreSQL connection closed")
+
 
     logging.info("✅ ETL Job Finished")
