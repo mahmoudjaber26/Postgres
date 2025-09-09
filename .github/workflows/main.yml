@@ -57,7 +57,7 @@ jobs:
           echo "$GOOGLE_CREDENTIALS_JSON" > powerbi-etl-creds.json
           python -c "import json; d=json.load(open('powerbi-etl-creds.json')); print('Service account email:', d.get('client_email'))"
         env:
-          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CRED }}
 
      
       - name: Run ETL (Sheets → BigQuery)
