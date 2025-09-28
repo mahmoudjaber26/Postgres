@@ -35,7 +35,10 @@ DB_CONFIG = {
     "port": os.getenv("POSTGRES_PORT", "5432"),
     "sslmode": os.getenv("PGSSLMODE", "prefer"),  # set to "require" for managed Postgres
 }
-
+required = ["POSTGRES_HOST","POSTGRES_DB","POSTGRES_USER","POSTGRES_PASSWORD","POSTGRES_PORT"]
+missing = [k for k in required if not os.getenv(k)]
+    if missing:
+        raise RuntimeError(f"Missing required env vars : {', '.join(missing)}")
 GSERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_CRED")  # JSON string (from GitHub Secret)
 TMP_GOOGLE_CREDS_PATH = os.path.join(BASE_DIR, "gsa.json")
 
@@ -221,5 +224,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
