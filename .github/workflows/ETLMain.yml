@@ -1,16 +1,16 @@
-name: ETL GoogleSheets → Postgres
+name: On-prem ETL (Google Sheets → Postgres)
 
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: {}
   schedule:
-    - cron: "15 01 * * *"   # 01:15 UTC (≈ 04:15 Amman)
+    - cron: "*/10 * * * *"   # every 10 minutes
+  workflow_dispatch: {}
 
 jobs:
   run-etl:
-    runs-on: ubuntu-latest
-
+    runs-on: self-hosted
+    
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -25,30 +25,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Connectivity check (Postgres)
-        if: always()
-        env:
-            PGHOST: ${{ secrets.PGHOST }}
-            PGPORT: ${{ secrets.PGPORT }}
-            PGDATABASE: ${{ secrets.PGDATABASE }}
-            PGUSER: ${{ secrets.PGUSER }}
-            PGPASSWORD: ${{ secrets.PGPASSWORD }}
-            PGSSLMODE: ${{ secrets.PGSSLMODE }}
-        run: |
-            sudo apt-get update -y && sudo apt-get install -y postgresql-client
-            echo "Checking TCP reachability…"
-            pg_isready -h "$PGHOST" -p "$PGPORT" -d "$PGDATABASE" || (echo "❌ Host/port unreachable"; exit 1)
-            echo "Trying a simple SQL…"
-            PGPASSWORD="$POSTGRES_PASSWORD" psql "host=$POSTGRES_HOST port=$POSTGRES_PORT dbname=$POSTGRES_DB user=$POSTGRES_USER sslmode=${PGSSLMODE:-require}" -c "select now();" -tA   
-
-      - name: Run ETL
+      # Optional: quick Python-level connection test (works on Windows & Linux)
+      - name: Sanity check DB connectivity
         env:
           PGHOST: ${{ secrets.POSTGRES_HOST }}
           PGPORT: ${{ secrets.POSTGRES_PORT }}
-          PGDATABASE: ${{ secrets.POSTGRES_DB }}
-          PGUSER: ${{ secrets.POSTGRES_USER }}
-          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          PGDATABASE: ${{ secrets.PGDATABASEY }}
+          PGUSER: ${{ secrets.PGUSERY }}
+          PGPASSWORD: ${{ secrets.PGPASSWORDY }}
           PGSSLMODE: ${{ secrets.PGSSLMODE }}
-          GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CRED }}
+        run: |
+          python - << 'PY'
+          import os, psycopg2
+          cfg = dict(
+            host=os.getenv("POSTGRES_HOST"),
+            port=os.getenv("POSTGRES_PORT","5432"),
+            dbname=os.getenv("PGDATABASEY"),
+            user=os.getenv("PGUSERY"),
+            password=os.getenv("PGPASSWORDY"),
+            sslmode=os.getenv("PGSSLMODE","disable")
+          )
+          try:
+              conn = psycopg2.connect(**cfg); conn.close()
+              print("✅ DB reachable")
+          except Exception as e:
+              print("❌ DB not reachable:", e); raise
+          PY
+
+      - name: Run ETL
+        env:
+          PGHOST: ${{ secrets.POSTGRRES_HOST }}
+          PGPORT: ${{ secrets.POSTGRES_PORT }}
+          PGDATABASE: ${{ secrets.PGDATABASEY }}
+          PGUSER: ${{ secrets.PGUSERY }}
+          PGPASSWORD: ${{ secrets.PGPASSWORDY }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+          GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CREDS }}
         run: |
           python read_gsheet.py
