@@ -35,4 +35,4 @@ jobs:
           PGSSLMODE: ${{ secrets.PGSSLMODE }}
           GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CRED }}
         run: |
-          python ReadGsheet.py
+          python read_gsheet.py
