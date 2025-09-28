@@ -7,26 +7,47 @@ on:
     - cron: "*/10 * * * *"   # every 10 minutes
   workflow_dispatch: {}
 
+# prevent overlapping runs on slow networks
+concurrency:
+  group: etl-onprem
+  cancel-in-progress: false
+
 jobs:
   run-etl:
-    runs-on: self-hosted
-    
+    # Your Windows self-hosted runner; if you didn't add custom labels, these built-ins exist
+    runs-on: [self-hosted, Windows, X64]
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
+      - name: Show runner & Python info
+        shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "Runner OS:" (Get-CimInstance Win32_OperatingSystem).Caption
+          python -V
+          where.exe python
+
+      - name: Install Python dependencies
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Optional: quick Python-level connection test (works on Windows & Linux)
-      - name: Sanity check DB connectivity
+      # Optional but handy: confirm secrets are present (does NOT print values)
+      - name: Secrets presence check (safe)
+        shell: powershell
+        run: |
+          $vars = @('POSTGRES_HOST','POSTGRES_PORT','PGDATABASEY','PGUSERY','PGPASSWORDY','PGSSLMODE','GOOGLE_CRED')
+          foreach ($v in $vars) {
+            if ($env:$v) { Write-Host "$v set: YES" } else { throw "$v is NOT set" }
+          }
+
+      # Optional: quick DB connectivity sanity before the ETL (helps fail fast)
+      - name: DB connectivity sanity (Python)
+        shell: powershell
         env:
           PGHOST: ${{ secrets.POSTGRES_HOST }}
           PGPORT: ${{ secrets.POSTGRES_PORT }}
@@ -34,32 +55,27 @@ jobs:
           PGUSER: ${{ secrets.PGUSERY }}
           PGPASSWORD: ${{ secrets.PGPASSWORDY }}
           PGSSLMODE: ${{ secrets.PGSSLMODE }}
-        run: |
-          python - << 'PY'
-          import os, psycopg2
-          cfg = dict(
-            host=os.getenv("POSTGRES_HOST"),
-            port=os.getenv("POSTGRES_PORT","5432"),
-            dbname=os.getenv("PGDATABASEY"),
-            user=os.getenv("PGUSERY"),
-            password=os.getenv("PGPASSWORDY"),
-            sslmode=os.getenv("PGSSLMODE","disable")
-          )
-          try:
-              conn = psycopg2.connect(**cfg); conn.close()
-              print("✅ DB reachable")
-          except Exception as e:
-              print("❌ DB not reachable:", e); raise
-          PY
+        run: >
+          python -c "import os, psycopg2;
+          cfg=dict(host=os.getenv('POSTGRES_HOST'),port=os.getenv('POSTGRES_PORT','5432'),
+          dbname=os.getenv('PGDATABASEY'),user=os.getenv('PGUSERY'),
+          password=os.getenv('PGPASSWORDY'),sslmode=os.getenv('PGSSLMODE','disable'));
+          conn=psycopg2.connect(**cfg); conn.close(); print('✅ DB reachable')"
 
-      - name: Run ETL
+      - name: Run ETL (auto-pick script name)
+        shell: powershell
         env:
-          PGHOST: ${{ secrets.POSTGRRES_HOST }}
+          PGHOST: ${{ secrets.POSTGRES_HOST }}
           PGPORT: ${{ secrets.POSTGRES_PORT }}
           PGDATABASE: ${{ secrets.PGDATABASEY }}
           PGUSER: ${{ secrets.PGUSERY }}
           PGPASSWORD: ${{ secrets.PGPASSWORDY }}
           PGSSLMODE: ${{ secrets.PGSSLMODE }}
-          GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CRED }}
+          GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CRED}}
         run: |
-          python read_gsheet.py
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path .\read_gsheet.py) { $script = 'read_gsheet.py' }
+          elseif (Test-Path .\ReadGsheet.py) { $script = 'ReadGsheet.py' }
+          else { throw 'ETL script not found (read_gsheet.py / ReadGsheet.py)' }
+          Write-Host "Running $script ..."
+          python $script
