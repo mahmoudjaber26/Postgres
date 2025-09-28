@@ -1,43 +1,45 @@
 import logging
+import os
+import json
+import hashlib
+from typing import Dict, List, Any
+
+import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
 import gspread
-import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
-import json
-import os
 
-# ================== Absolute Path ==================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CREDENTIALS_FILE = os.path.join(BASE_DIR, "powerbi-etl-e1ebfd104446.json")
+# ================== PATHS ==================
+BASE_DIR = os.path.dirname(os.path.abspath(_file_))
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 
-# ================== CONFIGURE LOGGING ==================
+# ================== LOGGING ==================
 logging.basicConfig(
-    filename="logs.txt",
+    filename=os.path.join(BASE_DIR, "logs.txt"),
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 console = logging.StreamHandler()
 console.setLevel(logging.INFO)
-formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-console.setFormatter(formatter)
+console.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 logging.getLogger().addHandler(console)
 
-# ================== CONFIG ==================
-CONFIG_FILE = r"C:\Users\mjaber\Downloads\Python Transfer Files\Google Sheets Read in PY\config.json"
-
+# ================== ENV / SECRETS ==================
 DB_CONFIG = {
-    "host": os.getenv("POSTGRES_HOST","localhost"),
-    "database": os.getenv("POSTGRES_DB","postgres"),
-    "user": os.getenv("POSTGRES_USER","postgres"),
-    "password": os.getenv("POSTGRES_PASSWORD","0000"),
-    "port": int(os.getenv("POSTGRES_PORT","5432")),
+    "host": os.getenv("POSTGRES_HOST", "127.0.0.1"),
+    "database": os.getenv("POSTGRES_DB", "postgres"),
+    "user": os.getenv("POSTGRES_USER", "postgres"),
+    "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
+    "port": os.getenv("POSTGRES_POST", "5432"),
+    "sslmode": os.getenv("PGSSLMODE", "prefer"),  # set to "require" for managed Postgres
 }
 
-GSHEET_CREDENTIALS = r"C:\Users\mjaber\Downloads\Python Transfer Files\Google Sheets Read in PY\powerbi-etl-e1ebfd104446.json"
+GSERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_CRED")  # JSON string (from GitHub Secret)
+TMP_GOOGLE_CREDS_PATH = os.path.join(BASE_DIR, "gsa.json")
 
-# ================== DB CONNECTION ==================
+# ================== CONNECTIONS ==================
 def connect_postgres():
     try:
         conn = psycopg2.connect(**DB_CONFIG)
@@ -49,10 +51,17 @@ def connect_postgres():
 
 def connect_gsheet():
     try:
-        scope = ["https://spreadsheets.google.com/feeds",
-                 "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(
-            GSHEET_CREDENTIALS, scope)
+        if not GSERVICE_ACCOUNT_JSON:
+            raise RuntimeError("Missing GSERVICE_ACCOUNT_JSON env var.")
+        # Write creds to a temp file (do not commit)
+        with open(TMP_GOOGLE_CREDS_PATH, "w", encoding="utf-8") as f:
+            f.write(GSERVICE_ACCOUNT_JSON)
+
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(TMP_GOOGLE_CREDS_PATH, scope)
         client = gspread.authorize(creds)
         logging.info("✅ Connected to Google Sheets")
         return client
@@ -61,96 +70,134 @@ def connect_gsheet():
         raise
 
 # ================== HELPERS ==================
-def create_table_if_not_exists(cursor, table_name, df):
-    """Create table if not exists with inferred columns"""
-    cols = []
-    for col in df.columns:
-        # Infer types
-        if col.lower() == "submitted at":
+def ensure_row_hash(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure a deterministic _row_hash column exists (used when 'cdn' uniqueness is absent).
+    The hash is computed from the entire row content.
+    """
+    if "_row_hash" in df.columns:
+        return df
+
+    def row_to_hash(row: pd.Series) -> str:
+        # Convert row to a sorted JSON string for stability
+        # Use strings for all values to avoid dtype issues
+        payload = {str(k): ("" if pd.isna(v) else str(v)) for k, v in row.to_dict().items()}
+        blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    df["_row_hash"] = df.apply(row_to_hash, axis=1)
+    return df
+
+def create_table_if_not_exists(cursor, table_name: str, df: pd.DataFrame):
+    """
+    Create table if not exists, with inferred columns from df.
+    Adds a _row_hash column for universal dedupe when 'cdn' is absent.
+    """
+    cols_sql: List[str] = []
+    existing_cols = [c for c in df.columns if c != "_row_hash"]
+
+    for col in existing_cols:
+        # Basic inference (customize as needed)
+        if col.lower() in ("submitted at", "submitted_at", "timestamp", "created_at"):
             col_type = "TIMESTAMP"
-        elif col.lower() == "cdn":
-            col_type = "TEXT"
         else:
             col_type = "TEXT"
-        cols.append(f"\"{col}\" {col_type}")
-    col_defs = ", ".join(cols)
+        cols_sql.append(f"\"{col}\" {col_type}")
 
-    # add unique constraint on cdn if exists
+    # add _row_hash
+    cols_sql.append("\"_row_hash\" TEXT")
+
     ddl = f"""
     CREATE TABLE IF NOT EXISTS "{table_name}" (
-        {col_defs}
+        {", ".join(cols_sql)}
     );
     """
     cursor.execute(ddl)
-    # If cdn exists, add unique index
-    if "cdn" in [c.lower() for c in df.columns]:
-        try:
-            cursor.execute(
-                f'CREATE UNIQUE INDEX IF NOT EXISTS "{table_name}_cdn_uniq" ON "{table_name}" ("cdn")'
-            )
-        except Exception as e:
-            logging.warning(f"⚠ Could not create unique index on {table_name}: {e}")
 
-def insert_new_rows(conn, table_name, df):
-    """Insert new rows with deduplication"""
+    # Unique on cdn if exists; otherwise on _row_hash
+    lowered = [c.lower() for c in existing_cols]
+    if "cdn" in lowered:
+        cursor.execute(
+            f'CREATE UNIQUE INDEX IF NOT EXISTS "{table_name}_cdn_uniq" ON "{table_name}" ("cdn")'
+        )
+    cursor.execute(
+        f'CREATE UNIQUE INDEX IF NOT EXISTS "{table_name}_rowhash_uniq" ON "{table_name}" ("_row_hash")'
+    )
+
+def coerce_timestamps(df: pd.DataFrame) -> pd.DataFrame:
+    for cand in ["Submitted At", "submitted at", "submitted_at", "Timestamp", "timestamp", "created_at"]:
+        if cand in df.columns:
+            df[cand] = pd.to_datetime(df[cand], errors="coerce")
+    return df
+
+def insert_new_rows(conn, table_name: str, df: pd.DataFrame):
+    """
+    Insert rows with deduplication:
+    - If cdn present -> ON CONFLICT (cdn) DO NOTHING
+    - Otherwise -> ON CONFLICT (_row_hash) DO NOTHING
+    """
     if df.empty:
         logging.info(f"⚠ No data to insert for {table_name}")
         return
 
     cursor = conn.cursor()
+    df = coerce_timestamps(df)
+    df = ensure_row_hash(df)
+
     create_table_if_not_exists(cursor, table_name, df)
 
-    # Ensure Submitted At column is timestamp
-    if "Submitted At" in df.columns:
-        df["Submitted At"] = pd.to_datetime(df["Submitted At"], errors="coerce")
+    cols = [c for c in df.columns]  # include _row_hash
+    values = [tuple(None if (pd.isna(x) or x == "NaT") else x for x in row) for row in df.to_numpy()]
+    cols_sql = ",".join([f"\"{c}\"" for c in cols])
 
-    # Prepare insert
-    cols = [f"\"{c}\"" for c in df.columns]
-    values = [tuple(row) for row in df.to_numpy()]
+    # Prefer cdn if present, else fallback to _row_hash
+    conflict_target = "cdn" if "cdn" in [c.lower() for c in cols] else "_row_hash"
+
     sql = f"""
-        INSERT INTO "{table_name}" ({",".join(cols)})
+        INSERT INTO "{table_name}" ({cols_sql})
         VALUES %s
+        ON CONFLICT ("{conflict_target}") DO NOTHING
     """
-    if "cdn" in [c.lower() for c in df.columns]:
-        sql += " ON CONFLICT (cdn) DO NOTHING"
 
     try:
-        before = cursor.rowcount
         execute_values(cursor, sql, values)
-        after = cursor.rowcount      
         conn.commit()
-        inserted = after - before    
-        logging.info(f"✅ Inserted {inserted} rows into {table_name}")
+        logging.info(f"✅ Upserted {len(values)} rows into {table_name} (conflict on {conflict_target})")
     except Exception as e:
         conn.rollback()
         logging.error(f"❌ Failed to insert rows into {table_name}: {e}")
+        raise
 
 # ================== MAIN ==================
-if __name__ == "__main__":
+def main():
     logging.info("🚀 Starting ETL Job")
 
+    conn = None
     try:
-        # connections
         conn = connect_postgres()
         gclient = connect_gsheet()
 
-        # load config
-        with open(CONFIG_FILE, "r") as f:
-            sheet_files = json.load(f)
-        logging.info("✅ Loaded config.json successfully")
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            sheet_cfg: Dict[str, Any] = json.load(f)
+        logging.info("✅ Loaded config.json")
 
-        # iterate over files
-        for _, cfg in sheet_files.items():
+        # Iterate groups (e.g., Mobility, Home, Travel, Devices, Nissan)
+        for _, cfg in sheet_cfg.items():
             file_name = cfg["file_name"]
             sheet_map = cfg.get("sheet_file", {})
             logging.info(f"📂 Processing file: {file_name}")
-            gfile = gclient.open(file_name)
+
+            try:
+                gfile = gclient.open(file_name)
+            except Exception as e:
+                logging.error(f"❌ Could not open spreadsheet '{file_name}': {e}")
+                continue
 
             for ws_name, table_name in sheet_map.items():
                 try:
                     logging.info(f"➡ Loading sheet '{ws_name}' → table '{table_name}'")
-                    worksheet = gfile.worksheet(ws_name)
-                    data = worksheet.get_all_records()
+                    ws = gfile.worksheet(ws_name)
+                    data = ws.get_all_records()  # returns list[dict]
                     df = pd.DataFrame(data)
 
                     if df.empty:
@@ -164,10 +211,13 @@ if __name__ == "__main__":
 
     except Exception as e:
         logging.error(f"❌ ETL job failed: {e}")
+        raise
     finally:
-        if 'conn' in locals():
+        if conn is not None:
             conn.close()
             logging.info("🔒 PostgreSQL connection closed")
 
-
     logging.info("✅ ETL Job Finished")
+
+if __name__ == "__main__":
+    main()
