@@ -11,7 +11,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ================== PATHS ==================
-BASE_DIR = os.path.dirname(os.path.abspath(_file_))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 
 # ================== LOGGING ==================
@@ -221,4 +221,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
