@@ -32,7 +32,7 @@ DB_CONFIG = {
     "database": os.getenv("POSTGRES_DB", "postgres"),
     "user": os.getenv("POSTGRES_USER", "postgres"),
     "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
-    "port": os.getenv("POSTGRES_POST", "5432"),
+    "port": os.getenv("POSTGRES_PORT", "5432"),
     "sslmode": os.getenv("PGSSLMODE", "prefer"),  # set to "require" for managed Postgres
 }
 
@@ -221,3 +221,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
