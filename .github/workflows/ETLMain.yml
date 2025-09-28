@@ -7,14 +7,17 @@ on:
     - cron: "*/10 * * * *"   # every 10 minutes
   workflow_dispatch: {}
 
-# prevent overlapping runs on slow networks
+# Force classic CMD shell to bypass PowerShell execution policy
+defaults:
+  run:
+    shell: cmd
+
 concurrency:
   group: etl-onprem
   cancel-in-progress: false
 
 jobs:
   run-etl:
-    # Your Windows self-hosted runner; if you didn't add custom labels, these built-ins exist
     runs-on: [self-hosted, Windows, X64]
 
     steps:
@@ -22,60 +25,83 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Show runner & Python info
-        shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host "Runner OS:" (Get-CimInstance Win32_OperatingSystem).Caption
+          ver
+          where python
           python -V
-          where.exe python
 
       - name: Install Python dependencies
-        shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Optional but handy: confirm secrets are present (does NOT print values)
-      - name: Secrets presence check (safe)
-        shell: powershell
+      # Map your secrets -> env the script expects (writes to GITHUB_ENV)
+      - name: Map secrets to app environment
+        env:
+          _GOOGLE_CRED: ${{ secrets.GOOGLE_CRED }}
+          _PGSSLMODE:   ${{ secrets.PGSSLMODE }}
+          _PG_DATABASEY: ${{ secrets.PG_DATABASEY }}
+          _PG_PASSWORDY: ${{ secrets.PG_PASSWORDY }}
+          _PG_USERY:     ${{ secrets.PG_USERY }}
+          _POSTGRES_DB:       ${{ secrets.POSTGRES_DB }}
+          _POSTGRES_HOST:     ${{ secrets.POSTGRES_HOST }}
+          _POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          _POSTGRES_PORT:     ${{ secrets.POSTGRES_PORT }}
+          _POSTGRES_USER:     ${{ secrets.POSTGRES_USER }}
         run: |
-          $vars = @('POSTGRES_HOST','POSTGRES_PORT','PGDATABASEY','PGUSERY','PGPASSWORDY','PGSSLMODE','GOOGLE_CRED')
-          foreach ($v in $vars) {
-            if ($env:$v) { Write-Host "$v set: YES" } else { throw "$v is NOT set" }
-          }
+          rem ---- Host / Port (defaults if blank) ----
+          if defined _POSTGRES_HOST (echo POSTGRES_HOST=%_POSTGRES_HOST%>>%GITHUB_ENV%) else (echo POSTGRES_HOST=127.0.0.1>>%GITHUB_ENV%)
+          if defined _POSTGRES_PORT (echo PGPORT=%_POSTGRES_PORT%>>%GITHUB_ENV%) else (echo PGPORT=5432>>%GITHUB_ENV%)
 
-      # Optional: quick DB connectivity sanity before the ETL (helps fail fast)
+          rem ---- Database name: PG_DATABASEY > POSTGRES_DB > postgres ----
+          if defined _PG_DATABASEY (echo PGDATABASE=%_PG_DATABASEY%>>%GITHUB_ENV%) else if defined _POSTGRES_DB (echo PGDATABASE=%_POSTGRES_DB%>>%GITHUB_ENV%) else (echo PGDATABASE=postgres>>%GITHUB_ENV%)
+
+          rem ---- User: PG_USERY > POSTGRES_USER > postgres ----
+          if defined _PG_USERY (echo PGUSER=%_PG_USERY%>>%GITHUB_ENV%) else if defined _POSTGRES_USER (echo PGUSER=%_POSTGRES_USER%>>%GITHUB_ENV%) else (echo PGUSER=postgres>>%GITHUB_ENV%)
+
+          rem ---- Password: PG_PASSWORDY > POSTGRES_PASSWORD (no default) ----
+          if defined _PG_PASSWORDY (echo PGPASSWORD=%_PG_PASSWORDY%>>%GITHUB_ENV%) else if defined _POSTGRES_PASSWORD (echo PGPASSWORD=%_POSTGRES_PASSWORD%>>%GITHUB_ENV%)
+
+          rem ---- SSL mode (default disable inside LAN) ----
+          if defined _PGSSLMODE (echo PGSSLMODE=%_PGSSLMODE%>>%GITHUB_ENV%) else (echo PGSSLMODE=disable>>%GITHUB_ENV%)
+
+          rem ---- Google SA JSON: pass directly later (avoid writing large JSON here) ----
+          if defined _GOOGLE_CRED (echo GOOGLE_CRED_SET=1>>%GITHUB_ENV%) else (echo GOOGLE_CRED_SET=0>>%GITHUB_ENV%)
+
+      # Quick presence check (does NOT print secret values)
+      - name: Env presence check (safe)
+        run: |
+          if not defined POSTGRES_HOST (echo POSTGRES_HOST not set & exit /b 1)
+          if not defined PGPORT (echo PGPORT not set & exit /b 1)
+          if not defined PGDATABASE (echo PGDATABASE not set & exit /b 1)
+          if not defined PGUSER (echo PGUSER not set & exit /b 1)
+          if not defined PGPASSWORD (echo PGPASSWORD not set & exit /b 1)
+          if not defined PGSSLMODE (echo PGSSLMODE not set & exit /b 1)
+          if "%GOOGLE_CRED_SET%"=="0" (echo GOOGLE_CRED not set & exit /b 1)
+          echo All required envs are present.
+
+      # Optional: sanity probe to DB before the ETL
       - name: DB connectivity sanity (Python)
-        shell: powershell
         env:
-          PGHOST: ${{ secrets.POSTGRES_HOST }}
-          PGPORT: ${{ secrets.POSTGRES_PORT }}
-          PGDATABASE: ${{ secrets.PGDATABASEY }}
-          PGUSER: ${{ secrets.PGUSERY }}
-          PGPASSWORD: ${{ secrets.PGPASSWORDY }}
-          PGSSLMODE: ${{ secrets.PGSSLMODE }}
-        run: >
-          python -c "import os, psycopg2;
-          cfg=dict(host=os.getenv('POSTGRES_HOST'),port=os.getenv('POSTGRES_PORT','5432'),
-          dbname=os.getenv('PGDATABASEY'),user=os.getenv('PGUSERY'),
-          password=os.getenv('PGPASSWORDY'),sslmode=os.getenv('PGSSLMODE','disable'));
-          conn=psycopg2.connect(**cfg); conn.close(); print('✅ DB reachable')"
-
-      - name: Run ETL (auto-pick script name)
-        shell: powershell
-        env:
-          PGHOST: ${{ secrets.POSTGRES_HOST }}
-          PGPORT: ${{ secrets.POSTGRES_PORT }}
-          PGDATABASE: ${{ secrets.PGDATABASEY }}
-          PGUSER: ${{ secrets.PGUSERY }}
-          PGPASSWORD: ${{ secrets.PGPASSWORDY }}
-          PGSSLMODE: ${{ secrets.PGSSLMODE }}
-          GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CRED}}
+          PGHOST:     ${{ env.POSTGRES_HOST }}
+          PGPORT:     ${{ env.POSTGRES_PORT }}
+          PGDATABASE: ${{ env.PGDATABASEY }}
+          PGUSER:     ${{ env.PGUSERY }}
+          PGPASSWORD: ${{ env.PGPASSWORDY }}
+          PGSSLMODE:  ${{ env.PGSSLMODE }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          if (Test-Path .\read_gsheet.py) { $script = 'read_gsheet.py' }
-          elseif (Test-Path .\ReadGsheet.py) { $script = 'ReadGsheet.py' }
-          else { throw 'ETL script not found (read_gsheet.py / ReadGsheet.py)' }
-          Write-Host "Running $script ..."
-          python $script
+          python -c "import os, psycopg2; cfg=dict(host=os.environ['POSTGRES_HOST'],port=os.environ['PGPORT'],dbname=os.environ['PGDATABASE'],user=os.environ['PGUSER'],password=os.environ['PGPASSWORD'],sslmode=os.environ['PGSSLMODE']); conn=psycopg2.connect(**cfg); conn.close(); print('DB OK')"
+
+      - name: Run ETL
+        env:
+          PGHOST:     ${{ env.POSTGRES_HOST }}
+          PGPORT:     ${{ env.POSTGRES_PORT }}
+          PGDATABASE: ${{ env.PGDATABASEY }}
+          PGUSER:     ${{ env.PGUSERY }}
+          PGPASSWORD: ${{ env.PGPASSWORDY }}
+          PGSSLMODE:  ${{ env.PGSSLMODE }}
+          GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CRED }}
+        run: |
+          if exist read_gsheet.py (set SCRIPT=read_gsheet.py) else if exist ReadGsheet.py (set SCRIPT=ReadGsheet.py) else (echo ETL script not found & exit /b 1)
+          echo Running %SCRIPT% ...
+          python %SCRIPT%
