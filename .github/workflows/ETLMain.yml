@@ -25,6 +25,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Connectivity check (Postgres)
+        if: always()
+        env:
+            PGHOST: ${{ secrets.PGHOST }}
+            PGPORT: ${{ secrets.PGPORT }}
+            PGDATABASE: ${{ secrets.PGDATABASE }}
+            PGUSER: ${{ secrets.PGUSER }}
+            PGPASSWORD: ${{ secrets.PGPASSWORD }}
+            PGSSLMODE: ${{ secrets.PGSSLMODE }}
+        run: |
+            sudo apt-get update -y && sudo apt-get install -y postgresql-client
+            echo "Checking TCP reachability…"
+            pg_isready -h "$PGHOST" -p "$PGPORT" -d "$PGDATABASE" || (echo "❌ Host/port unreachable"; exit 1)
+            echo "Trying a simple SQL…"
+            PGPASSWORD="$POSTGRES_PASSWORD" psql "host=$POSTGRES_HOST port=$POSTGRES_PORT dbname=$POSTGRES_DB user=$POSTGRES_USER sslmode=${PGSSLMODE:-require}" -c "select now();" -tA   
+
       - name: Run ETL
         env:
           PGHOST: ${{ secrets.POSTGRES_HOST }}
