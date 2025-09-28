@@ -33,6 +33,6 @@ jobs:
           PGUSER: ${{ secrets.POSTGRES_USER }}
           PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           PGSSLMODE: ${{ secrets.PGSSLMODE }}
-          GSERVICE_ACCOUNT_JSON: ${{ secrets.GSERVICE_ACCOUNT_JSON }}
+          GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CRED }}
         run: |
           python ReadGsheet.py
