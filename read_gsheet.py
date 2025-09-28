@@ -29,9 +29,9 @@ logging.getLogger().addHandler(console)
 # ================== ENV / SECRETS ==================
 DB_CONFIG = {
     "host": os.getenv("POSTGRES_HOST", "127.0.0.1"),
-    "database": os.getenv("POSTGRES_DB", "postgres"),
-    "user": os.getenv("POSTGRES_USER", "postgres"),
-    "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
+    "database": os.getenv("PGDATABASEY", "etl_db"),
+    "user": os.getenv("PGUSERY", "etl_writer"),
+    "password": os.getenv("PGPASSWORDY", "Yafa@2025"),
     "port": os.getenv("POSTGRES_PORT", "5432"),
     "sslmode": os.getenv("PGSSLMODE", "prefer"),  # set to "require" for managed Postgres
 }
@@ -224,6 +224,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
