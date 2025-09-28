@@ -60,6 +60,6 @@ jobs:
           PGUSER: ${{ secrets.PGUSERY }}
           PGPASSWORD: ${{ secrets.PGPASSWORDY }}
           PGSSLMODE: ${{ secrets.PGSSLMODE }}
-          GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CREDS }}
+          GSERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CRED }}
         run: |
           python read_gsheet.py
