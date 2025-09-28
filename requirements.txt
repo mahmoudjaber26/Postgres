@@ -1,0 +1,4 @@
+gsread==5.12.4
+oauth2client==4.1.3
+pandas==2.2.2
+psycopg2-binary==2.9.9
